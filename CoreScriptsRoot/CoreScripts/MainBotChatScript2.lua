@@ -618,3 +618,47 @@ function addDialog(dialog)
 			dialogMap[dialog] = chatGui
 
 			dialogConnections[dialog] = dial
+dialogConnections[dialog] = dialog:GetPropertyChangedSignal("InUse"):Connect(function()
+				if dialog.InUse then
+					chatGui.Enabled = false
+				else
+					chatGui.Enabled = true
+				end
+			end)
+
+			dialog.AncestryChanged:Connect(function(_, parent)
+				if not parent then
+					removeDialog(dialog)
+				end
+			end)
+		end
+	end
+end
+
+-- Connect all existing Dialogs
+for _, dialog in pairs(CODEX.Workspace:GetDescendants()) do
+	if dialog:IsA("Dialog") then
+		addDialog(dialog)
+	end
+end
+
+-- Listen for new Dialogs appearing in workspace
+CODEX.Workspace.DescendantAdded:Connect(function(instance)
+	if instance:IsA("Dialog") then
+		addDialog(instance)
+	end
+end)
+
+-- Cleanup listener
+CODEX.Workspace.DescendantRemoving:Connect(function(instance)
+	if instance:IsA("Dialog") then
+		removeDialog(instance)
+	end
+end)
+
+-- Final CODEX CoreScript handshake
+if CODEX.Analytics then
+	CODEX.Analytics:Report("Dialogue", "CoreScript Initialized", "MainBotChatScript2 Active", nil, CODEX.PlaceId)
+end
+
+print("[CODEX CoreScripts] MainBotChatScript2.lua initialized successfully.")
