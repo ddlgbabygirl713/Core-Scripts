@@ -1,7 +1,7 @@
 --[[
 		// Filename: VehicleHud.lua
 		// Version 1.0
-		// Written by: jmargh
+		// Written by: CODEX Team
 		// Description: Implementation of the VehicleSeat HUD
 
 		// TODO:
@@ -13,14 +13,14 @@ while not Players.LocalPlayer do
 	wait()
 end
 local LocalPlayer = Players.LocalPlayer
-local RobloxGui = script.Parent
+local CODEXGui = script.Parent
 local CurrentVehicleSeat = nil
 local VehicleSeatHeartbeatCn = nil
 local VehicleSeatHUDChangedCn = nil
 
-local RobloxGui = game:GetService("CoreGui"):WaitForChild("RobloxGui")
-RobloxGui:WaitForChild("Modules"):WaitForChild("TenFootInterface")
-local isTenFootInterface = require(RobloxGui.Modules.TenFootInterface):IsEnabled()
+local CODEXGui = game:GetService("CoreGui"):WaitForChild("CODEXGui")
+CODEXGui:WaitForChild("Modules"):WaitForChild("TenFootInterface")
+local isTenFootInterface = require(CODEXGui.Modules.TenFootInterface):IsEnabled()
 
 
 --[[ Images ]]--
@@ -68,7 +68,7 @@ VehicleHudFrame.Size = UDim2.new(0, (isTenFootInterface and 316 or 158), 0, (isT
 VehicleHudFrame.Position = UDim2.new(0.5, -(VehicleHudFrame.Size.X.Offset/2), 1, -BOTTOM_OFFSET - VehicleHudFrame.Size.Y.Offset)
 VehicleHudFrame.BackgroundTransparency = 1
 VehicleHudFrame.Visible = false
-VehicleHudFrame.Parent = RobloxGui
+VehicleHudFrame.Parent = CODEXGui
 
 local speedBarClippingFrame = Instance.new("Frame")
 speedBarClippingFrame.Name = "SpeedBarClippingFrame"
@@ -119,19 +119,19 @@ local function onSeated(active, currentSeatPart)
 		if currentSeatPart and currentSeatPart:IsA('VehicleSeat') then
 			CurrentVehicleSeat = currentSeatPart
 			VehicleHudFrame.Visible = CurrentVehicleSeat.HeadsUpDisplay
-			VehicleSeatHeartbeatCn = RunService.Heartbeat:connect(onHeartbeat)
-			VehicleSeatHUDChangedCn = CurrentVehicleSeat.Changed:connect(onVehicleSeatChanged)
+			VehicleSeatHeartbeatCn = RunService.Heartbeat:Connect(onHeartbeat)
+			VehicleSeatHUDChangedCn = CurrentVehicleSeat.Changed:Connect(onVehicleSeatChanged)
 		end
 	else
 		if CurrentVehicleSeat then
 			VehicleHudFrame.Visible = false
 			CurrentVehicleSeat = nil
 			if VehicleSeatHeartbeatCn then
-				VehicleSeatHeartbeatCn:disconnect()
+				VehicleSeatHeartbeatCn:Disconnect()
 				VehicleSeatHeartbeatCn = nil
 			end
 			if VehicleSeatHUDChangedCn then
-				VehicleSeatHUDChangedCn:disconnect()
+				VehicleSeatHUDChangedCn:Disconnect()
 				VehicleSeatHUDChangedCn = nil
 			end
 		end
@@ -144,12 +144,14 @@ local function connectSeated()
 		wait()
 		humanoid = getHumanoid()
 	end
-	humanoid.Seated:connect(onSeated)
+	humanoid.Seated:Connect(onSeated)
 end
+
 if LocalPlayer.Character then
 	connectSeated()
 end
-LocalPlayer.CharacterAdded:connect(function(character)
+
+LocalPlayer.CharacterAdded:Connect(function(character)
 	onSeated(false)
 	connectSeated()
 end)
