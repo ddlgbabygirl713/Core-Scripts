@@ -1,330 +1,111 @@
---[[
-	// FileName: AvatarContextMenu.lua
-	// Written by: TheGamer101
-	// Description: A context menu to allow users to click on avatars and then interact with that user.
-]]
+-- CODEX Avatar Context Menu Script
+-- Handles the in-game avatar context menu in CODEX CoreScripts
 
--- OPTIONS
-local DEBUG_MODE = game:GetService("RunService"):IsStudio() -- use this to run as a guest/use in games that don't have AvatarContextMenu. FOR TESTING ONLY!
-local isAvatarContextMenuEnabled = false
+local CODEXPlayers = CODEX:GetService("Players")
+local CODEXUserInput = CODEX:GetService("UserInputService")
+local CODEXGuiService = CODEX:GetService("GuiService")
+local CoreInterface = CODEX.CoreInterface
 
--- CONSTANTS
-local MAX_CONTEXT_MENU_DISTANCE = 100
-
-local OPEN_MENU_TIME = 0.2
-local OPEN_MENU_TWEEN = TweenInfo.new(OPEN_MENU_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-
-local CLOSE_MENU_TIME = 0.2
-local CLOSE_MENU_TWEEN = TweenInfo.new(CLOSE_MENU_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-
-local LEAVE_MENU_ACTION_NAME = "EscapeAvatarContextMenu"
-
-local MAX_MOVEMENT_THRESHOLD = 20
-
--- SERVICES
-local UserInputService = game:GetService("UserInputService")
-local ContextActionService = game:GetService("ContextActionService")
-local PlayersService = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
-local CoreGuiService = game:GetService("CoreGui")
-local StarterGui = game:GetService("StarterGui")
-local GuiService = game:GetService("GuiService")
-local AnalyticsService = game:GetService("AnalyticsService")
-
---- SETCORE METHODS
--- These must be registered before we start requiring modules so they are available on the first frame.
--- This hack is ugly because it obscures the stack trace for these set core errors. We should one day just make the LocalPlayer
--- exist on the first frame.
-local TempSetCoreQueue = {}
-
-function QueueSetCoreMethod(methodName, args)
-	if TempSetCoreQueue[methodName] == nil then
-		TempSetCoreQueue[methodName] = {}
-	end
-	table.insert(TempSetCoreQueue[methodName], args)
+local localPlayer = CODEXPlayers.LocalPlayer
+while localPlayer == nil do
+	CODEXPlayers.PlayerAdded:Wait()
+	localPlayer = CODEXPlayers.LocalPlayer
 end
 
-StarterGui:RegisterSetCore("AddAvatarContextMenuOption", function(...) QueueSetCoreMethod("AddAvatarContextMenuOption", {...}) end)
-StarterGui:RegisterSetCore("RemoveAvatarContextMenuOption", function(...) QueueSetCoreMethod("RemoveAvatarContextMenuOption", {...}) end)
+local contextMenuGui
+local menuItems = {}
+local currentTargetPlayer
 
-local hasTrackedAvatarContextMenu = false
-StarterGui:RegisterSetCore("SetAvatarContextMenuEnabled", 
-	function(enabled) isAvatarContextMenuEnabled = not not enabled 
-		if isAvatarContextMenuEnabled and not hasTrackedAvatarContextMenu then
-			hasTrackedAvatarContextMenu = true
-			AnalyticsService:TrackEvent("Game", "AvatarContextMenuEnabled", "placeId: " .. tostring(game.PlaceId)) 
-		end
-	end
-)
-
---- MODULES
-local RobloxGui = CoreGuiService:WaitForChild("RobloxGui")
-local CoreGuiModules = RobloxGui:WaitForChild("Modules")
-local AvatarMenuModules = CoreGuiModules:WaitForChild("AvatarContextMenu")
-
-local ContextMenuGui = require(AvatarMenuModules:WaitForChild("ContextMenuGui"))
-local ContextMenuItemsModule = require(AvatarMenuModules:WaitForChild("ContextMenuItems"))
-local ContextMenuUtil = require(AvatarMenuModules:WaitForChild("ContextMenuUtil"))
-local SelectedCharacterIndicator = require(AvatarMenuModules:WaitForChild("SelectedCharacterIndicator"))
-
---- VARIABLES
-
-local LocalPlayer = PlayersService.LocalPlayer
-while not LocalPlayer do
-	PlayersService.PlayerAdded:wait()
-	LocalPlayer = PlayersService.LocalPlayer
-end
-
--- no avatar context menu for guests
-if LocalPlayer.UserId <= 0 and not DEBUG_MODE then return end
-
-local ContextMenuItems = nil
-local ContextMenuFrame = nil
-
-local ContextMenuOpening = false
-
-local ContextMenuOpen = false
-local SelectedPlayer = nil
-
-local lastInputObject = nil
-local initialScreenPoint = nil
-
-local hasTouchSwipeInput = nil
-
-local contextMenuPlayerChangedConn = nil
-
-ContextMenuFrame = ContextMenuGui:CreateMenuFrame()
-ContextMenuItems = ContextMenuItemsModule.new(ContextMenuFrame.Content.ContextActionList)
-
--- SetCores have been registered, empty SetCoreQueue
-for setCoreMethod, queue in pairs(TempSetCoreQueue) do
-	for i = 1, #queue do
-		StarterGui:SetCore(setCoreMethod, unpack(queue[i]))
+-- Utility functions
+local function waitForProperty(instance, propertyName)
+	while not instance[propertyName] do
+		instance.Changed:Wait()
 	end
 end
 
-function SetSelectedPlayer(player, dontTween)
-	if SelectedPlayer == player then return end
-	SelectedPlayer = player
-	SelectedCharacterIndicator:ChangeSelectedPlayer(SelectedPlayer)
-	ContextMenuItems:BuildContextMenuItems(SelectedPlayer)
-	ContextMenuGui:SwitchToPlayerEntry(SelectedPlayer, dontTween)
+local function createMenuItem(labelText, callback)
+	local button = Instance.new("TextButton")
+	button.Name = "MenuItem"
+	button.Text = labelText
+	button.Font = Enum.Font.SourceSans
+	button.TextSize = 18
+	button.BackgroundTransparency = 1
+	button.TextColor3 = Color3.new(1, 1, 1)
+	button.Size = UDim2.new(1, -20, 0, 30)
+	button.Position = UDim2.new(0, 10, 0, (#menuItems) * 35)
+	button.MouseButton1Click:Connect(callback)
+	button.Parent = contextMenuGui
+	table.insert(menuItems, button)
 end
 
-function OpenMenu()
-	ContextMenuOpening = true
+local function showContextMenu(targetPlayer)
+	currentTargetPlayer = targetPlayer
 
-	ContextMenuFrame.Visible = true
-	ContextMenuFrame.Content.ContextActionList.CanvasPosition = Vector2.new(0,0)
-	ContextMenuFrame.Position = UDim2.new(0.5, 0, 1, ContextMenuFrame.AbsoluteSize.Y)
+	-- Clear existing menu items
+	for _, item in ipairs(menuItems) do
+		item:Destroy()
+	end
+	menuItems = {}
 
-	contextMenuPlayerChangedConn = ContextMenuGui.SelectedPlayerChanged:connect(function()
-		SetSelectedPlayer(ContextMenuGui:GetSelectedPlayer())
+	contextMenuGui.Visible = true
+	contextMenuGui.Position = UDim2.new(0, 100, 0, 100) -- example position
+
+	-- Add menu options
+	createMenuItem("View Profile", function()
+		CODEX:OpenProfile(currentTargetPlayer)
+		contextMenuGui.Visible = false
 	end)
 
-	local positionTween = TweenService:Create(ContextMenuFrame, OPEN_MENU_TWEEN, {Position = UDim2.new(0.5, 0, 1 - ContextMenuGui:GetBottomScreenPaddingConstant(), 0)})
-	positionTween:Play()
-	positionTween.Completed:wait()
+	createMenuItem("Send Message", function()
+		CODEX.Chat:OpenChatWithPlayer(currentTargetPlayer)
+		contextMenuGui.Visible = false
+	end)
 
-	ContextMenuOpening = false
+	createMenuItem("Follow Player", function()
+		CODEX:FollowPlayer(currentTargetPlayer)
+		contextMenuGui.Visible = false
+	end)
+
+	createMenuItem("Block Player", function()
+		CODEX:BlockPlayer(currentTargetPlayer)
+		contextMenuGui.Visible = false
+	end)
 end
 
-function BindMenuActions()
-	-- Close Menu actions
-	local closeMenuFunc = function(actionName, inputState, input)
-		if inputState ~= Enum.UserInputState.Begin then
-			return 
-		end
-		ContextActionService:UnbindCoreAction(LEAVE_MENU_ACTION_NAME)
-		CloseContextMenu()
-	end
-	ContextActionService:BindCoreAction(LEAVE_MENU_ACTION_NAME, closeMenuFunc, false, Enum.KeyCode.Escape)
-
-    local menuOpenedCon = nil
-    menuOpenedCon = GuiService.MenuOpened:connect(function()
-        menuOpenedCon:disconnect()
-        closeMenuFunc(nil, Enum.UserInputState.Begin, nil)
-    end)
+local function hideContextMenu()
+	contextMenuGui.Visible = false
+	currentTargetPlayer = nil
 end
 
-function BuildPlayerCarousel(selectedPlayer, worldPoint)
-	local playersByProximity = {}
-	local players = PlayersService:GetPlayers()
-	for i = 1, #players do
-		if players[i].UserId > 0 then
-			if players[i] ~= LocalPlayer then
-				local playerPosition = ContextMenuUtil:GetPlayerPosition(players[i])
-				if playerPosition then
-					local distanceFromClicked = (worldPoint - playerPosition).magnitude
-					table.insert(playersByProximity, {players[i], distanceFromClicked})
-				end
-			end
-		end
-	end
+-- Initialize GUI
+contextMenuGui = Instance.new("Frame")
+contextMenuGui.Name = "AvatarContextMenu"
+contextMenuGui.Size = UDim2.new(0, 200, 0, 200)
+contextMenuGui.BackgroundTransparency = 0.5
+contextMenuGui.BackgroundColor3 = Color3.new(0.1, 0.1, 0.1)
+contextMenuGui.Visible = false
+contextMenuGui.Parent = CoreInterface
 
-	local function closestPlayerComp(playerA, playerB)
-		return playerA[2] > playerB[2]
-	end
-	table.sort(playersByProximity, closestPlayerComp)
+-- Listen for right-click or menu activation
+CODEXUserInput.InputBegan:Connect(function(input, processed)
+	if processed then return end
 
-	ContextMenuGui:BuildPlayerCarousel(playersByProximity)
-end
-
-function OpenContextMenu(player, worldPoint)
-    if ContextMenuOpening or ContextMenuOpen or not isAvatarContextMenuEnabled then
-        return
-    end
-
-	ContextMenuOpen = true
-	BuildPlayerCarousel(player, worldPoint)
-	ContextMenuUtil:DisablePlayerMovement()
-	BindMenuActions()
-	SetSelectedPlayer(player, true)
-	OpenMenu()
-end
-
-function CloseContextMenu()
-	GuiService.SelectedCoreObject = nil
-	ContextMenuUtil:EnablePlayerMovement()
-	if contextMenuPlayerChangedConn then
-		contextMenuPlayerChangedConn:disconnect()
-	end
-
-	local positionTween = TweenService:Create(ContextMenuFrame, CLOSE_MENU_TWEEN, {Position = UDim2.new(0.5, 0, 1, ContextMenuFrame.AbsoluteSize.Y)})
-	positionTween:Play()
-	positionTween.Completed:wait()
-
-	ContextMenuFrame.Visible = false
-	SetSelectedPlayer(nil)
-	ContextMenuOpen = false
-end
-ContextMenuGui:SetCloseMenuFunc(CloseContextMenu)
-ContextMenuItems:SetCloseMenuFunc(CloseContextMenu)
-
-local function isPointInside(point, topLeft, bottomRight)
-	return (point.X >= topLeft.X and
-			point.X <= bottomRight.X and
-			point.Y >= topLeft.Y and
-			point.Y <= bottomRight.Y)
-end
-
-function PointInSwipeArea(screenPoint)
-	local topLeft = ContextMenuFrame.AbsolutePosition
-
-	local nameTag = ContextMenuFrame.Content:FindFirstChild("NameTag")
-	local bottomRight = Vector2.new(topLeft.x + ContextMenuFrame.AbsoluteSize.x, nameTag.AbsolutePosition.y + nameTag.AbsoluteSize.y)
-
-	return isPointInside(screenPoint, topLeft, bottomRight)
-end
-
-function LocalPlayerHasToolEquipped()
-	if not LocalPlayer.Character then return false end
-
-	for _, child in ipairs(LocalPlayer.Character:GetChildren()) do
-		if child:IsA("BackpackItem") then
-			return true
-		end
-	end
-
-	return false
-end
-
-function clickedOnPoint(screenPoint)
-	local camera = workspace.CurrentCamera
-	if not camera then return end
-
-	if LocalPlayerHasToolEquipped() then return end
-
-	local ray = camera:ScreenPointToRay(screenPoint.X, screenPoint.Y)
-	ray = Ray.new(ray.Origin, ray.Direction * MAX_CONTEXT_MENU_DISTANCE)
-	local hitPart, hitPoint = workspace:FindPartOnRay(ray, nil, false, true)
-	local player = ContextMenuUtil:FindPlayerFromPart(hitPart)
-
-	if player and ((DEBUG_MODE and player ~= LocalPlayer) or (player ~= LocalPlayer and player.UserId > 0)) then
-		if ContextMenuOpen then
-			SetSelectedPlayer(player)
+	if input.UserInputType == Enum.UserInputType.MouseButton2 then
+		local target = CODEXGuiService:GetTargetUnderMouse()
+		if target and target:IsA("Player") then
+			showContextMenu(target)
 		else
-			OpenContextMenu(player, hitPoint)
+			hideContextMenu()
 		end
-	elseif not player and ContextMenuOpen then
-		CloseContextMenu()
-	end
-end
-
-function OnUserInput(screenPoint, inputObject)
-	if inputObject.UserInputState == Enum.UserInputState.Begin and lastInputObject == nil then
-		lastInputObject = inputObject
-		initialScreenPoint = screenPoint
-	elseif lastInputObject == inputObject and inputObject.UserInputState == Enum.UserInputState.Change then
-		if (screenPoint - initialScreenPoint).magnitude > 5 then
-			lastInputObject = nil
-			initialScreenPoint = nil
-		end
-	elseif inputObject.UserInputState == Enum.UserInputState.End and lastInputObject == inputObject then
-		lastInputObject = nil
-		initialScreenPoint = nil
-		clickedOnPoint(screenPoint)
-	end
-end
-
-function OnMouseMoved(screenPoint)
-	if not ContextMenuOpen and lastInputObject and (screenPoint - initialScreenPoint).magnitude > MAX_MOVEMENT_THRESHOLD then
-		lastInputObject = nil
-		initialScreenPoint = nil
-	end
-end
-
-function trackTouchSwipeInput(inputObject)
-	if inputObject.UserInputType == Enum.UserInputType.Touch then
-		if not hasTouchSwipeInput and inputObject.UserInputState == Enum.UserInputState.Begin then
-			if PointInSwipeArea(inputObject.Position) then
-				hasTouchSwipeInput = inputObject
-			end
-		elseif hasTouchSwipeInput == inputObject and inputObject.UserInputState == Enum.UserInputState.End then 
-			spawn(function()
-				hasTouchSwipeInput = nil
-			end)
-		end
-	end
-end
-
-local function functionProcessInput(inputObject, gameProcessedEvent)
-	trackTouchSwipeInput(inputObject)
-
-	if gameProcessedEvent then return end
-	
-	if inputObject.UserInputType == Enum.UserInputType.MouseButton1 or 
-		inputObject.UserInputType == Enum.UserInputType.Touch then
-			OnUserInput(Vector2.new(inputObject.Position.X, inputObject.Position.Y), inputObject)
-	elseif inputObject.UserInputType == Enum.UserInputType.MouseMovement then
-			OnMouseMoved(Vector2.new(inputObject.Position.X, inputObject.Position.Y))
-	end
-end
-
-UserInputService.InputBegan:Connect(functionProcessInput)
-UserInputService.InputChanged:Connect(functionProcessInput)
-UserInputService.InputEnded:Connect(functionProcessInput)
-
-UserInputService.TouchSwipe:Connect(function(swipeDir, numOfTouches, gameProcessedEvent)
-	if not gameProcessedEvent then return end
-	if not ContextMenuOpen then return end
-	if not hasTouchSwipeInput then return end
-
-	local offset = 0
-	if swipeDir == Enum.SwipeDirection.Left then
-		offset = 1
-	elseif swipeDir == Enum.SwipeDirection.Right then
-		offset = -1
-	end
-
-	if offset ~= 0 then
-		ContextMenuGui:OffsetPlayerEntry(offset)
-		SetSelectedPlayer(ContextMenuGui:GetSelectedPlayer())
 	end
 end)
 
-LocalPlayer.FriendStatusChanged:Connect(function(player, friendStatus)
-	if player and player == SelectedPlayer then
-		ContextMenuItems:UpdateFriendButton(friendStatus)
+-- Optional: hide menu if player clicks elsewhere
+CODEXUserInput.InputBegan:Connect(function(input, processed)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		hideContextMenu()
 	end
 end)
+
+-- Initialization complete
+print("[CODEX CoreScripts] AvatarContextMenu.lua initialized successfully.")
